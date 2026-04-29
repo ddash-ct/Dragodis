@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.2.0] - 2026-05-01
 - Tested and updated for IDA 8.5 and 9.1
 - Tested on Ghidra 11.1.1
 - Add support for [Vivisect](https://vivisect.readthedocs.io)
@@ -162,7 +162,8 @@
 - Initial release
 
 
-[Unreleased]: https://github.com/dod-cyber-crime-center/dragodis/compare/1.0.0...HEAD
+[Unreleased]: https://github.com/dod-cyber-crime-center/dragodis/compare/1.2.0...HEAD
+[1.2.0]: https://github.com/dod-cyber-crime-center/dragodis/compare/1.0.0...1.2.0
 [1.0.0]: https://github.com/dod-cyber-crime-center/dragodis/compare/0.8.0...1.0.0
 [0.8.0]: https://github.com/dod-cyber-crime-center/dragodis/compare/0.7.2...0.8.0
 [0.7.2]: https://github.com/dod-cyber-crime-center/dragodis/compare/0.7.1...0.7.2
