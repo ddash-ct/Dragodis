@@ -13,3 +13,4 @@ dist/
 .vscode/
 *.idb
 Pipfile
+dragodis.toml

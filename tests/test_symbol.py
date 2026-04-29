@@ -1,6 +1,6 @@
 
 import pytest
-
+from dragodis import BACKEND_VIVISECT
 
 EXPECTED_IMPORTS_X86 = [
     (0x40a000, None, "GetCommandLineA", "KERNEL32"),
@@ -76,7 +76,7 @@ EXPECTED_IMPORTS_X86 = [
 def test_imports_x86_ida(disassembler):
     actual = [
         (import_.address, import_.thunk_address, import_.name, import_.namespace)
-        for import_ in disassembler.imports
+        for import_ in disassembler.imports()
     ]
     assert actual == EXPECTED_IMPORTS_X86
 
@@ -89,18 +89,18 @@ def test_imports_x86_ghidra(disassembler):
     ]
     actual = [
         (import_.address, import_.thunk_address, import_.name, import_.namespace)
-        for import_ in disassembler.imports
+        for import_ in disassembler.imports()
     ]
     assert actual == expected
 
 
 def test_imports_references(disassembler):
     imp = disassembler.get_import("LoadLibraryA")
-    assert set(ref.from_address for ref in imp.references_to) == {0x405873}
+    assert set(ref.from_address for ref in imp.references_to()) == {0x405873}
 
 
 def test_imports_arm_ida(disassembler):
-    imports = list(disassembler.imports)
+    imports = list(disassembler.imports())
     assert len(imports) == 4
     # Newer versions of IDA includes the namespace or library name.
     assert set(import_.namespace for import_ in imports) in ({".dynsym"}, {None})
@@ -117,7 +117,7 @@ def test_imports_arm_ida(disassembler):
 def test_imports_arm_ghidra(disassembler):
     imports = [
         (import_.address, import_.thunk_address, import_.name)
-        for import_ in disassembler.imports
+        for import_ in disassembler.imports()
     ]
     assert imports == [
         # Ghidra's import address is None, because it doesn't map an "extern" segment.
@@ -129,16 +129,23 @@ def test_imports_arm_ghidra(disassembler):
 
 
 def test_exports_x86_ida(disassembler):
-    exports = [(export.address, export.name) for export in disassembler.exports]
+    exports = [(export.address, export.name) for export in disassembler.exports()]
     assert exports == [(0x4014E0, "start")]
 
 
 def test_exports_x86_ghidra(disassembler):
-    exports = [(export.address, export.name) for export in disassembler.exports]
+    exports = [(export.address, export.name) for export in disassembler.exports()]
     assert exports == [(0x4014E0, "entry")]
 
 
 def test_exports_arm(disassembler):
+    # Vivisect only finds the entry point as an export.
+    if disassembler.name == BACKEND_VIVISECT:
+        expected = [(0x1030c, "__entry")]
+        actual = [(export.address, export.name) for export in disassembler.exports()]
+        assert actual == expected
+        return
+
     # NOTE: Only testing main user code symbols, since the other entry points
     # can vary based on disassembler.
     expected = [
@@ -172,11 +179,10 @@ def test_exports_arm(disassembler):
         (0x211ec, "string7a"),
         (0x2121c, "string7f"),
         # (0x2126a, "__bss_start"),
-
     ]
     actual = sorted([
         (export.address, export.name)
-        for export in disassembler.exports
+        for export in disassembler.exports()
         if export.name in ("encrypt", "decrypt", "main") or export.name.startswith("string")
     ])
     assert actual == expected

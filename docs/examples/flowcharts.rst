@@ -15,13 +15,13 @@ flow type, the lines within, as well as other basic blocks that come into or out
     >>> print(flowchart)
     flowchart[0x00401000]
 
-    >>> print("\n".join(map(str, flowchart.blocks)))
+    >>> print("\n".join(map(str, flowchart.blocks())))
     block[0x00401000 --> 0x00401003]
     block[0x00401003 --> 0x0040100d]
     block[0x0040100d --> 0x00401029]
     block[0x00401029 --> 0x0040102b]
 
-    >>> block = list(flowchart.blocks)[1]
+    >>> block = list(flowchart.blocks())[1]
     >>> print(hex(block.start))
     0x401003
     >>> print(hex(block.end))
@@ -38,10 +38,10 @@ flow type, the lines within, as well as other basic blocks that come into or out
     >>> print(block == block2)
     True
 
-    >>> print("\n".join(map(str, block.blocks_to)))
+    >>> print("\n".join(map(str, block.blocks_to())))
     block[0x00401000 --> 0x00401003]
     block[0x0040100d --> 0x00401029]
 
-    >>> print("\n".join(map(str, block.blocks_from)))
+    >>> print("\n".join(map(str, block.blocks_from())))
     block[0x0040100d --> 0x00401029]
     block[0x00401029 --> 0x0040102b]

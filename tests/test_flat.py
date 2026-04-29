@@ -1,7 +1,7 @@
 import pytest
 
 import dragodis
-from dragodis import CommentType
+from dragodis import CommentType, BACKEND_IDA, BACKEND_GHIDRA, BACKEND_VIVISECT
 from dragodis import interface
 
 
@@ -13,18 +13,56 @@ def test_disassembler_info_ghidra_all(disassembler):
     assert disassembler.name == "Ghidra"
 
 
+def test_disassembler_info_vivisect_all(disassembler):
+    assert disassembler.name == "Vivisect"
+
+
+def test_project_path_ida(disassembler):
+    if disassembler.ida_version >= 850:
+        assert disassembler.project_path == disassembler.input_path.with_suffix(".i64")
+    else:
+        assert disassembler.project_path == disassembler.input_path.with_suffix(".idb")
+
+
+def test_project_path_ghidra(disassembler):
+    input_path = disassembler.input_path
+    assert disassembler.project_path == input_path.parent / (input_path.name + "_ghidra")
+
+
+def test_project_path_vivisect(disassembler):
+    assert disassembler.project_path == disassembler.input_path.with_suffix(".viv")
+
+
 def test_processor_info(disassembler):
     assert disassembler.bit_size == 32
-    assert disassembler.processor_name == "x86"
-    assert disassembler.compiler_name in ("Visual C++", "visualstudio:unknown")
-    assert disassembler.is_big_endian == False
+    assert disassembler.is_x86
+    assert disassembler.compiler_name in ("Visual C++", "Visual Studio", "unknown")
+    assert disassembler.is_big_endian is False
 
 
 def test_processor_info_arm(disassembler):
     assert disassembler.bit_size == 32
-    assert disassembler.processor_name == "ARM"
-    assert disassembler.compiler_name in ("GNU C++", "unknown")  # TODO: Ghidra fails to figure this one out.
-    assert disassembler.is_big_endian == False
+    assert disassembler.is_arm
+    assert disassembler.compiler_name in ("GNU C++", "default", "unknown")  # Ghidra does not have compiler spec information
+    assert disassembler.is_big_endian is False                              # for compilers other than Visual Studio for ARM.
+
+
+def test_compiler(disassembler):
+    if disassembler.name == BACKEND_VIVISECT:
+        pytest.xfail("Vivisect does not support overriding the compiler.")
+    assert disassembler.compiler_name in ("Visual C++", "Visual Studio")
+    disassembler.set_compiler(dragodis.COMPILER_BORLAND_C_PLUS_PLUS)
+    assert disassembler.compiler_name == "Borland C++"
+
+
+def test_compiler_arm(disassembler):
+    if disassembler.name == BACKEND_VIVISECT:
+        pytest.xfail("Vivisect does not support overriding the compiler.")
+    assert disassembler.compiler_name in ("GNU C++", "default")
+
+    # Ghidra currently only has compiler spec information for the Visual Studio compiler for ARM.
+    disassembler.set_compiler(dragodis.COMPILER_VISUAL_C_PLUS_PLUS)
+    assert disassembler.compiler_name in ("Visual C++", "Visual Studio")
 
 
 def test_addressing_ida(disassembler):
@@ -44,7 +82,9 @@ def test_entry_point_x86(disassembler):
 
 
 def test_entry_point_arm(disassembler):
-    assert disassembler.entry_point == 0x1030c
+    # One is the .init_proc location, the other is the actual "start" function.
+    # Both are valid.
+    assert disassembler.entry_point in (0x102bc, 0x1030c)
 
 
 def test_base_address_x86(disassembler):
@@ -63,7 +103,7 @@ def test_file_offset(disassembler):
     with pytest.raises(dragodis.NotExistError):
         disassembler.get_file_offset(0x1)
     with pytest.raises(dragodis.NotExistError):
-        disassembler.get_virtual_address(0xc001)
+        disassembler.get_virtual_address(0xffffffff)
 
 
 def test_is_loaded(disassembler):
@@ -86,7 +126,7 @@ def test_lines(disassembler):
     assert list(disassembler.line_addresses(start=0x401003, end=0x401029)) == expected
 
     # Test data section
-    if disassembler.name.lower() == "ida":
+    if disassembler.name == BACKEND_IDA:
         expected = [
             0x40c000,
             0x40c00d,
@@ -101,7 +141,7 @@ def test_lines(disassembler):
         ]
     # Ghidra doesn't have the concept of alignment bytes and instead treats them as individual
     # undefined bytes.
-    elif disassembler.name.lower() == "ghidra":
+    elif disassembler.name == BACKEND_GHIDRA:
         expected = [
             0x40c000,
             *range(0x40c00d, 0x40c010),
@@ -113,6 +153,16 @@ def test_lines(disassembler):
             0x40c080,
             0x40c0a0,
             *range(0x40c0c3, 0x40c0e8),
+        ]
+    # Vivisect ignores alignment bytes. Not treating them as defined locations.
+    elif disassembler.name == BACKEND_VIVISECT:
+        expected = [
+            0x40c000,
+            0x40c010,
+            0x40c02c,
+            0x40c05c,
+            0x40c080,
+            0x40c0a0,
         ]
 
     assert [line.address for line in disassembler.lines(start=0x40C000, end=0x40C0E8)] == expected
@@ -203,7 +253,7 @@ def test_name(disassembler, address, is_defined):
 ], ids=["eol", "anterior", "posterior", "plate", "repeatable"])
 def test_comment(disassembler, address, comment, comment_type):
     # Test setting comment
-    assert disassembler.get_comment(address, comment_type=comment_type) is None
+    assert disassembler.get_comment(address, comment_type=comment_type) in (None, "int")  # vivisect comments data with type
     disassembler.set_comment(address, comment, comment_type=comment_type)
     assert disassembler.get_comment(address, comment_type=comment_type) == comment
     # Test resetting comment
@@ -235,18 +285,28 @@ def test_get_function(disassembler):
     assert len(funcs) > 200
 
 
-def test_get_function_by_name(disassembler):
+def test_get_function_by_name_ida_ghidra_x86(disassembler):
     func = disassembler.get_function_by_name("printf")
     assert func
     assert func.start == 0x4012a0
     assert "printf" in func.name
 
 
-@pytest.mark.parametrize("backend", ["ida", "ghidra"])
-def test_create_function(shared_datadir, backend):
-    input_path = shared_datadir / "strings_x86 .text[00401000,0040102a].bin"
+def test_get_function_by_name_vivisect_x86(disassembler):
+    # Vivisect has a function signature feature (vamp), but it is comes with limited signatures.
+    func = disassembler.get_function_by_name("seh4_prolog")
+    assert func
+    assert func.start == 0x40261c
+    assert "seh4_prolog" in func.name
+
+
+def test_create_function(shared_datadir, disassembler_params):
+    params = {
+        "file_path": str(shared_datadir / "strings_x86 .text[00401000,0040102a].bin"),
+        "processor": dragodis.PROCESSOR_X86,
+    }
     try:
-        with dragodis.open_program(str(input_path), backend, processor=dragodis.PROCESSOR_X86) as dis:
+        with dragodis.open_program(**params) as dis:
             if func := dis.get_function(0x0, None):
                 func.undefine(True)
             assert not dis.get_function(0x0, None)
@@ -268,7 +328,11 @@ def test_functions(disassembler):
     assert len(funcs) >= 200  # IDA had 220 and Ghidra had 226
     func_names = [func.name for func in funcs]
     func_addrs = [func.start for func in funcs]
-    assert "_printf" in func_names
+    # Vivisect doesn't have the library signature matching.
+    if disassembler.name == "Vivisect":
+        assert "seh4_prolog" in func_names
+    else:
+        assert "_printf" in func_names
     assert 0x401030 in func_addrs
 
     # TODO: more tests
@@ -283,9 +347,15 @@ def test_functions(disassembler):
     assert len(funcs) == 2
     assert sorted(func.start for func in funcs) == [0x401000, 0x401030]
 
-    # Start at almost the end so we only produce the "RtlUnwind" function.
+    # Start at almost the end, so we only produce the "RtlUnwind" function.
     # (Using any earlier address will already produce inconsistent results with which functions exist)
     funcs = list(disassembler.functions(start=0x409b0c))
+
+    # Vivisect thinks some random data is a function, ignore it
+    if disassembler.name == "Vivisect":
+        if funcs[1].start == 0x40cfe4:
+            funcs.pop(1)
+
     assert len(funcs) == 1
     assert funcs[0].name == "RtlUnwind"
     assert funcs[0].start == 0x409b0e
@@ -352,6 +422,18 @@ def test_get_bytes(disassembler):
 
     # Data section
     assert disassembler.get_bytes(0x40c000, 2) == b"Id"
+
+    # Test overlap into unloaded bytes.
+    assert disassembler.get_bytes(0x40bd00, 0x105, default=0xAA) == (
+        b'nfoA\x00\x00f\x04SetFilePointer\x00\x00\xd4\x02HeapSize\x00\x00R\x00CloseHandle\x00\x1a\x05WriteConsoleA'
+        b'\x00\xb0\x01GetConsoleOutputCP\x00\x00$\x05WriteConsoleW\x00\x87\x04SetStdHandle\x00\x00\x88\x00CreateFi'
+        b'leA\x00KERNEL32.dll\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+        b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+        b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+        b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+        b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xAA\xAA\xAA\xAA\xAA'
+    )
+
 
 
 def test_find_bytes(disassembler):

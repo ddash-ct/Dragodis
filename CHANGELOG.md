@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+- Tested and updated for IDA 8.5 and 9.1
+- Tested on Ghidra 11.1.1
+- Add support for [Vivisect](https://vivisect.readthedocs.io)
+- Add `set_bytes()` in flat api.
+- Add `set_compiler()` in flat api.
+- Temporary files created by IDA are now removed if IDA doesn't clean them up.
+- The last few lines in the IDA log file are now shown in the error thrown when a connection to IDA cannot be established.
+- Added ability to set the filetype during instantiation. (See [documentation](README.md#specifying-file-type) for more information)
+- Generator properties, such as ".imports", can now be called (e.g. ".imports()").
+  - Using these as properties still works, but is now a deprecated feature.
+- Add option to skip autoanalysis in `open_program()`. (See [documentation](README.md#skip-autoanalysis) for more information)
+- Add support for backend prefixed keyword arguments in `open_program()`.
+- Add support for getting the `.count` and `.base` for array data types.
+- Add ability to configure Dragodis through a [settings.toml](src/dragodis/config/settings.toml) file. (See [documentation](README.md#configuration) for more information)
+- *IDA*
+  - Add `extra_args` keyword argument in `open_program()` to add extra command line switches to `ida` command.
+  - Add support for the `idalib` library provided in IDA 9.0+. (See [documentation](docs/install.md#IDA) for more information)
+  - Replaced usage of `IDA_INSTALL_DIR` environment variable to `IDADIR` to better match Hex-Ray's standard. 
+
+
 ## [1.0.0] - 2024-05-23
 - Dropped support for Python 3.8.
 - Fixed issue with default not being respected in `get_function_by_name()`.

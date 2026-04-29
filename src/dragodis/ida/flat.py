@@ -1,0 +1,489 @@
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+
+from .. import utils
+
+from typing import Iterable, Union, Optional
+
+import dragodis
+from dragodis.interface.flat import FlatAPI, MISSING
+from dragodis.exceptions import NotExistError
+from .data_type import IDADataType
+from .disassembler import IDADisassembler, IDARemoteDisassembler, IDALocalDisassembler
+from .function_signature import IDAFunctionSignature
+from .line import IDALine
+from .memory import IDAMemory, CachedMemory
+from .function import IDAFunction
+from .operand_value import IDARegister
+from .reference import IDAReference
+from .segment import IDASegment
+from .string import IDAString
+from .symbol import IDAImport, IDAExport
+from .variable import IDAGlobalVariable
+from ..interface import CompilerType, ReferenceType
+from ..utils import genproperty
+
+cache = lru_cache(maxsize=1024)
+
+
+class IDAFlatAPI(FlatAPI, IDADisassembler):
+
+    @property
+    def _cached_memory(self):
+        return CachedMemory(self)
+
+    def _bytes_loaded(self, addr: int, num_bytes: int) -> bool:
+        return self._ida_helpers.is_loaded(addr, num_bytes)
+
+    def _signed(self, value: int) -> int:
+        """
+        Converts unsigned integer originating from IDA to signed.
+        """
+        bitness = self._BADADDR.bit_length()
+        if value >> (bitness - 1):  # Is the hi-bit set?
+            value -= (1 << bitness)
+        return value
+
+    @property
+    def ida_version(self) -> int:
+        return self._idaapi.IDA_SDK_VERSION
+
+    @property
+    def version(self) -> str:
+        return str(self.ida_version / 100)
+
+    @property
+    def project_path(self) -> Path:
+        return Path(self._idc.get_idb_path())
+
+    @property
+    def processor_name(self) -> str:
+        proc = self._ida_ida.inf_get_procname()
+        # Switching "metapc" to "x86" to match Ghidra.
+        if proc == "metapc":
+            return "x86"
+        return proc
+
+    @property
+    def compiler_name(self) -> str:
+        cc_id = self._ida_ida.inf_get_cc_id()
+        return self._ida_typeinf.get_compiler_name(cc_id)
+
+    @property
+    def bit_size(self) -> int:
+        # IDA 7.6 adds ida_ida.inf_get_app_bitness()
+        if self.ida_version >= 760:
+            return self._ida_ida.inf_get_app_bitness()
+
+        if self._ida_ida.inf_is_64bit():
+            return 64
+        elif self._ida_ida.inf_is_32bit():
+            return 32
+        else:
+            return 16
+
+    @property
+    def is_big_endian(self) -> bool:
+        return self._ida_ida.inf_is_be()
+
+    @property
+    def entry_point(self) -> Optional[int]:
+        address = self._ida_ida.inf_get_start_ip()
+        if address != self._BADADDR:
+            return address
+
+    @cache
+    def get_virtual_address(self, file_offset: int, default=MISSING) -> int:
+        addr = self._ida_loader.get_fileregion_ea(file_offset)
+        if addr == self._idc.BADADDR:
+            if default is MISSING:
+                raise NotExistError(f"Cannot get linear address for file offset: {hex(file_offset)}")
+            return default
+        return addr
+
+    @cache
+    def get_file_offset(self, addr: int, default=MISSING) -> int:
+        file_offset = self._ida_loader.get_fileregion_offset(addr)
+        if file_offset == -1:
+            if default is MISSING:
+                raise NotExistError(f"Cannot get file offset for address: {hex(addr)}")
+            return default
+        return file_offset
+
+    def functions(self, start=None, end=None) -> Iterable[IDAFunction]:
+        # TODO: use remove_eval to optimize this?
+        #   - Create mechanism to chunk iterators?
+        #   - Reimplement idautils.Functions here?
+        for ea in self._idautils.Functions(start=start, end=end):
+            # IDA will include the function if started in the middle of it.
+            # Ignore this function to stay consistent with Ghidra.
+            if start and ea < start:
+                continue
+            yield self.get_function(ea)
+
+    # TODO: make a Memory object?
+
+    def get_byte(self, addr: int, default=MISSING) -> int:
+        if not self._bytes_loaded(addr, 1):
+            if default is MISSING:
+                raise NotExistError(f"Cannot get byte at {hex(addr)}")
+            return default
+        return self._ida_bytes.get_wide_byte(addr)
+
+    def get_bytes(self, addr: int, length: int, default: int = None) -> bytes:
+        if default is None and not self._ida_helpers.is_loaded(addr, length):
+            raise NotExistError(
+                f"Unable to obtain {length} bytes from 0x{addr:08X}: "
+                f"Address range not fully loaded."
+            )
+        return self._ida_helpers.get_bytes(addr, length, default=default or 0)
+        # FIXME: Disabling use of cached memory since we aren't invalidating caches properly.
+        # # If all bytes aren't available but a default was provided, get bytes
+        # # one at a time, replacing invalid bytes with the default.
+        # if default:
+        #     default = bytes([default])
+        # return self._cached_memory.get(addr, length, fill_pattern=default)
+
+    def set_compiler(self, compiler):
+        type_map = {
+            dragodis.COMPILER_VISUAL_C_PLUS_PLUS: self._ida_typeinf.COMP_MS,
+            dragodis.COMPILER_BORLAND_C_PLUS_PLUS: self._ida_typeinf.COMP_BC,
+            dragodis.COMPILER_GCC: self._ida_typeinf.COMP_GNU,
+            dragodis.COMPILER_DELPHI: self._ida_typeinf.COMP_BP
+        }
+
+        if isinstance(compiler, CompilerType):
+            try:
+                compiler = type_map[compiler]
+            except KeyError:
+                raise ValueError(f"Specified compiler is unknown: {compiler}. "
+                                   f"Please provide a CompilerType object or valid input for your disassembler.")
+
+        # IDA's compiler_info_t object only accepts integers as IDs.
+        if not isinstance(compiler, int):
+            raise TypeError(f"Cannot set Compiler ID to {compiler}")
+        cc = self._ida_ida.compiler_info_t()
+        cc.id = compiler
+
+        reset = self._ida_typeinf.set_compiler(cc, self._ida_typeinf.SETCOMP_OVERRIDE)
+        if not reset:
+            raise ValueError(f"Could not override compiler to {compiler}")
+        self._ida_auto.auto_wait()
+
+    def set_bytes(self, addr: int, data: bytes):
+        # Check if we would be writing to an uninitialized section.
+        if not self._ida_helpers.is_loaded(addr, len(data)):
+            raise NotExistError(f"Unable to write to address not fully initialized: 0x{addr:08x}")
+        self._ida_bytes.patch_bytes(addr, data)
+
+    def find_bytes(self, pattern: bytes, start: int = None, end: int = None, reverse=False) -> int:
+        # Convert bytes pattern into hex separated by space format that IDA likes.
+        pattern = " ".join(format(byte, "02X") for byte in pattern)
+
+        # In IDA 9, ida_search flags are no longer used.
+        if reverse:
+            if self.ida_version < 850:
+                flag = self._ida_search.SEARCH_UP
+            else:
+                flag = self._ida_bytes.BIN_SEARCH_BACKWARD | self._ida_bytes.BIN_SEARCH_NOSHOW
+            if start is None:
+                start = self.max_address
+            if end is None:
+                end = self.min_address
+        else:
+            if self.ida_version < 850:
+                flag = self._ida_search.SEARCH_DOWN
+            else:
+                flag = self._ida_bytes.BIN_SEARCH_FORWARD | self._ida_bytes.BIN_SEARCH_NOSHOW
+            if start is None:
+                start = self.min_address
+            if end is None:
+                end = self.max_address
+
+        if self.ida_version < 850:
+            found = self._ida_search.find_binary(start, end, pattern, 16, flag)
+        else:
+            # ida_search.find_binary() was changed to ida_bytes.find_bytes() in IDA 9
+            start, end = min(start, end), max(start, end)  # range is always low to high.
+            found = self._ida_bytes.find_bytes(pattern, range_start=start, range_end=end, radix=16, flags=flag)
+        if found == self._BADADDR:
+            return -1
+        else:
+            return found
+
+    def get_word(self, addr: int) -> int:
+        if not self._bytes_loaded(addr, 2):
+            raise NotExistError(f"Cannot get word at {hex(addr)}")
+        return self._ida_bytes.get_wide_word(addr)
+
+    def get_dword(self, addr: int) -> int:
+        if not self._bytes_loaded(addr, 4):
+            raise NotExistError(f"Cannot get dword at {hex(addr)}")
+        return self._ida_bytes.get_wide_dword(addr)
+
+    def get_qword(self, addr: int) -> int:
+        if not self._bytes_loaded(addr, 8):
+            raise NotExistError(f"Cannot get qword at {hex(addr)}")
+        return self._ida_bytes.get_qword(addr)
+
+    def get_function(self, addr: int, default=MISSING) -> IDAFunction:
+        func_t = self._ida_funcs.get_func(addr)
+        if not func_t:
+            if default is MISSING:
+                raise NotExistError(f"Function does not exist at {hex(addr)}")
+            return default
+        return IDAFunction(self, func_t)
+
+    def get_function_by_name(self, name: str, ignore_underscore: bool = True, default=MISSING) -> IDAFunction:
+        # Using ida_helpers instead of default implementation to improve performance.
+        func_t = self._ida_helpers.get_function_by_name(name, ignore_underscore=ignore_underscore)
+        if func_t is None:
+            if default is MISSING:
+                raise NotExistError(f"Unable to find function with name: {name}")
+            return default
+        return IDAFunction(self, func_t)
+
+    def create_function(self, start: int, end: int = None, *, default=MISSING) -> IDAFunction:
+        # Creates new function.
+        # IDA will try to determine the function bounds by calling find_func_bounds() if end is BADADDR.
+        success = self._ida_funcs.add_func(start, end or self._BADADDR)
+        if not success:
+            if default is MISSING:
+                if end:
+                    raise ValueError(f"Unable to create function at {hex(start)}->{hex(end)}")
+                else:
+                    raise ValueError(f"Unable to create function at {hex(start)}")
+            return default
+
+        # Ensure all code is analyzed.
+        func = self._ida_funcs.get_func(start)
+        self._ida_auto.plan_and_wait(func.start_ea, func.end_ea)
+
+        return IDAFunction(self, func)
+
+    # TODO: Add support for providing an operand to help get a better function signature type.
+    @cache
+    def get_function_signature(self, addr: int, default=MISSING) -> IDAFunctionSignature:
+        # Constructor will raise a NotExistError if we can't make a function signature.
+        try:
+            return IDAFunctionSignature(self, addr)
+        except NotExistError:
+            if default is MISSING:
+                raise
+            return default
+
+    def get_line(self, addr: int, default=MISSING) -> IDALine:
+        try:
+            return IDALine(self, addr)
+        except NotExistError:
+            if default is MISSING:
+                raise
+            return default
+
+    def get_register(self, name: str, default=MISSING) -> IDARegister:
+        reg_info = self._ida_idp.reg_info_t()
+        success = self._ida_idp.parse_reg_name(reg_info, name)
+        if not success:
+            if default is MISSING:
+                raise NotExistError(f"Invalid register name: {name}")
+            return default
+        return IDARegister(self, reg_info.reg, reg_info.size)
+
+    @cache
+    def get_segment(self, addr_or_name: Union[int, str], default=MISSING) -> IDASegment:
+        if isinstance(addr_or_name, str):
+            name = addr_or_name
+            segment_t = self._ida_segment.get_segm_by_name(name)
+            if not segment_t:
+                if default is MISSING:
+                    raise NotExistError(f"Could not find segment with name: {name}")
+                return default
+        elif isinstance(addr_or_name, int):
+            addr = addr_or_name
+            segment_t = self._ida_segment.getseg(addr)
+            if not segment_t:
+                if default is MISSING:
+                    raise NotExistError(f"Could not find segment containing address: 0x{addr:08x}")
+                return default
+        else:
+            raise ValueError(f"Invalid input: {addr_or_name!r}")
+
+        return IDASegment(self, segment_t)
+
+    def create_segment(self, name: str, start: int, size: int) -> IDASegment:
+        # TODO: Support other segment class types.
+        success = self._ida_segment.add_segm(0, start, start + size, name, "XTRN")
+        if not success:
+            raise ValueError(f"Unable to create segment at 0x{start:08x}")
+        return self.get_segment(start)
+
+    @genproperty
+    def segments(self) -> Iterable[IDASegment]:
+        # Taken from idautils.Segments()
+        for n in range(self._ida_segment.get_segm_qty()):
+            seg = self._ida_segment.getnseg(n)
+            if seg:
+                yield IDASegment(self, seg)
+
+    def get_string_bytes(self, addr: int, length: int = None, bit_width: int = None, default=MISSING) -> bytes:
+        if bit_width is None:
+            str_type = self._idc.get_str_type(addr)
+        elif bit_width == 8:
+            str_type = self._ida_nalt.STRTYPE_C
+        elif bit_width == 16:
+            str_type = self._ida_nalt.STRTYPE_C_16
+        elif bit_width == 32:
+            str_type = self._ida_nalt.STRTYPE_C_32
+        else:
+            raise ValueError(f"Invalid bit width: {bit_width}")
+
+        if length is None:
+            length = self._ida_bytes.get_max_strlit_length(
+                addr, str_type,
+                self._ida_bytes.ALOPT_IGNCLT | self._ida_bytes.ALOPT_IGNPRINT | self._ida_bytes.ALOPT_MAX4K
+            )
+        ret = self._ida_bytes.get_strlit_contents(addr, length, str_type)
+        if ret is None:
+            if default is MISSING:
+                raise NotExistError(f"Unable to obtain string bytes at 0x{addr:08x}")
+            return default
+        return ret
+
+    def strings(self, min_length=3) -> Iterable[IDAString]:
+        sc = self._idautils.Strings()
+        sc.setup(
+            strtypes=[
+                self._ida_nalt.STRTYPE_C,
+                self._ida_nalt.STRTYPE_C_16,
+                self._ida_nalt.STRTYPE_C_32,
+                self._ida_nalt.STRTYPE_PASCAL,
+                self._ida_nalt.STRTYPE_PASCAL_16,
+                self._ida_nalt.STRTYPE_LEN2,
+                self._ida_nalt.STRTYPE_LEN2_16,
+                self._ida_nalt.STRTYPE_LEN4,
+                self._ida_nalt.STRTYPE_LEN4_16,
+            ],
+            minlen=min_length,
+        )
+        for string in sc:
+            yield IDAString(self, string)
+
+    def get_data_type(self, name: str, default=MISSING) -> IDADataType:
+        if tif := IDADataType._create_tinfo(self, name):
+            return IDADataType(self, tif)
+        else:
+            if default is MISSING:
+                raise NotExistError(f"Invalid data type: {name!r}")
+            return default
+
+    @property
+    def max_address(self) -> int:
+        return self._ida_ida.inf_get_max_ea()
+
+    @property
+    def min_address(self) -> int:
+        return self._ida_ida.inf_get_min_ea()
+
+    @property
+    def base_address(self) -> int:
+        return self._ida_nalt.get_imagebase()
+
+    def open_memory(self, start: int, end: int) -> IDAMemory:
+        return IDAMemory(self, start, end)
+
+    def references_from(self, addr: int) -> Iterable[IDAReference]:
+        # TODO: Cache chunks
+        for xref in self._idautils.XrefsFrom(addr):
+            reference = IDAReference(self, xref)
+            # Ignore "ordinary flow" references, since that's just a reference to the next
+            # instruction, which Ghidra doesn't do.
+            if reference.type == ReferenceType.ordinary_flow:
+                continue
+            yield reference
+
+    def references_to(self, addr: int) -> Iterable[IDAReference]:
+        # TODO: Cache chunks
+        for xref in self._idautils.XrefsTo(addr):
+            yield IDAReference(self, xref)
+
+    def create_reference(self, from_address: int, to_address: int, ref_type: ReferenceType) -> IDAReference:
+        ref_type = IDAReference._type_map_inv[ref_type]
+        code = False
+        if ref_type in range(1, 6):  # data reference
+            success = self._ida_xref.add_dref(from_address, to_address, ref_type)
+        elif ref_type in range(16, 22):  # code reference
+            code = True
+            success = self._ida_xref.add_cref(from_address, to_address, ref_type)
+        else:
+            raise ValueError(f"Unsupported reference type: {ref_type}")
+        if not success:
+            raise ValueError(f"Unable to create reference: 0x{from_address:08x} -> 0x{to_address:08x}")
+
+        # IDA's xrefblt_t is actually an iterator which holds the attributes of the "current" reference
+        # being iterated.
+        # Copying the work done in xrefblt_t.refs_from()/refs_to()
+        xref = self._ida_xref.xrefblk_t()
+        xref.frm = from_address
+        xref.to = to_address
+        xref.type = ref_type
+        xref.iscode = code
+        xref.user = ref_type == 20
+        reference = IDAReference(self, xref)
+
+        # If reference is a new code call, tell analyzer to apply the callee's type to calling point.
+        if reference.type == ReferenceType.code_call:
+            self._ida_auto.auto_apply_type(reference.from_address, reference.to_address)
+
+        return reference
+
+    def get_variable(self, addr: int, default=MISSING) -> IDAGlobalVariable:
+        start_address = self._ida_bytes.get_item_head(addr)
+        # Don't count code as "variables". Otherwise we get all the
+        # loop labels as variables.
+        flags = self._ida_bytes.get_flags(addr)
+        is_code = self._ida_bytes.is_code(flags)
+        # Only count as variable if item has a name.
+        if not is_code and self._ida_name.get_name(start_address):
+            return IDAGlobalVariable(self, start_address)
+        elif default is MISSING:
+            raise NotExistError(f"Variable doesn't exist at {hex(addr)}")
+        else:
+            return default
+
+    @genproperty
+    def imports(self) -> Iterable[IDAImport]:
+        for address, thunk_address, name, namespace in self._ida_helpers.iter_imports():
+            yield IDAImport(self, address, thunk_address, name, namespace)
+
+    def get_import(self, name: str, default=MISSING) -> IDAImport:
+        # Using ida_helpers instead of default implementation to improve performance.
+        ret = self._ida_helpers.get_import(name)
+        if ret is None:
+            if default is MISSING:
+                raise NotExistError(f"Import with name '{name}' doesn't exist.")
+            return default
+        return IDAImport(self, *ret)
+
+    @genproperty
+    def exports(self) -> Iterable[IDAExport]:
+        for address, name in self._ida_helpers.iter_exports():
+            yield IDAExport(self, address, name)
+
+    def undefine(self, start: int, end: int = None) -> bool:
+        if end:
+            if end <= start:
+                raise ValueError(f"End address {hex(end)} is smaller than starting address {hex(start)}")
+            return self._ida_bytes.del_items(start, self._ida_bytes.DELIT_SIMPLE, end - start)
+        else:
+            return self._ida_bytes.del_items(start, self._ida_bytes.DELIT_SIMPLE)
+
+
+class IDALocal(IDAFlatAPI, IDALocalDisassembler):
+    ...
+
+
+class IDARemote(IDAFlatAPI, IDARemoteDisassembler):
+    ...

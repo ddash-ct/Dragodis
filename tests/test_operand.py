@@ -2,7 +2,7 @@
 import pytest
 
 import dragodis
-from dragodis import OperandType
+from dragodis import OperandType, BACKEND_VIVISECT, BACKEND_GHIDRA
 from dragodis.interface import Register, Phrase, StackVariable, GlobalVariable, RegisterList
 from dragodis.interface.types import ARMShiftType
 
@@ -125,14 +125,14 @@ def test_value_x86(disassembler):
 
 
 def test_value_arm(disassembler):
-    # Second operand value should be a register type with a shift.
-    # movs       r6,r6, asr #0x2
-    operand = disassembler.get_operand(0x106A4, 1)
+    # Third operand value should be a register type with a shift.
+    # add r1,r1,r3, asr #2
+    operand = disassembler.get_operand(0x103a8, 2)
     assert operand.type == OperandType.register
     assert operand.shift == (ARMShiftType.ASR, 2)
     value = operand.value
     assert value and isinstance(value, Register)
-    assert value.name == "r6"
+    assert value.name == "r3"
     assert operand.width == 4
     assert int(value) == -1
 
@@ -176,6 +176,9 @@ def _test_phrase(disassembler, address, index, phrase):
     (0x40156f, 1, (None, "eax", 4, 0x40dc20)),  # dword ptr [EAX*0x4 + DAT_0040dc20]
 ])
 def test_phrase_x86(disassembler, address, index, phrase):
+    if disassembler.name == BACKEND_VIVISECT and address in (0x40154e, 0x40156f):
+        # Vivisect fails to detect some code.
+        disassembler._workspace.makeCode(address)
     _test_phrase(disassembler, address, index, phrase)
 
 
@@ -189,7 +192,7 @@ def test_phrase_arm(disassembler, address, index, phrase):
 
 
 @pytest.mark.parametrize("address,index,names", [
-    # PUSH    {R11,LR}
+    # PUSH       {R11,LR}
     # stmdb      sp!,{r11 lr}
     (0x1058C, 0, ["sp", "r11", "lr"]),
     # POP     {R4-R10,PC}
@@ -227,6 +230,10 @@ def test_register_list_arm(disassembler, address, index, names):
     (0x40156f, 1, OperandType.phrase),      # dword ptr [EAX*0x4 + DAT_0040dc20]
 ])
 def test_type_x86(disassembler, address, index, operand_type):
+    if disassembler.name == BACKEND_VIVISECT and address == 0x40156f:
+        # Vivisect doesn't detect this as code
+        # TODO: Make a create_instruction() api.
+        disassembler._workspace.makeCode(address)
     operand = disassembler.get_operand(address, index)
     assert operand.type == operand_type
 
@@ -265,12 +272,21 @@ def test_type_ghidra_arm(disassembler, address, index, operand_type):
 @pytest.mark.parametrize("address,index,shift_type,shift_count", [
     (0x106A4, 1, ARMShiftType.ASR, 2),   # R6,ASR#2
     (0x103A4, 1, ARMShiftType.LSR, 31),  # R3,LSR#31
+    (0x103A8, 2, ARMShiftType.ASR, 2),   # R3,ASR#2
     (0x10698, 1, ARMShiftType.LSL, 0),   # R1  (no shift, default)
 ])
 def test_shift_info_arm(disassembler, address, index, shift_type, shift_count):
     instruction = disassembler.get_instruction(address)
-    operand = instruction.operands[index]
-    assert operand.shift == (shift_type, shift_count)
+    # Disassembler like Vivisect will sometimes use a different mnemonic instead.
+    if instruction.mnemonic == "asrs":
+        assert shift_type == ARMShiftType.ASR
+        assert instruction.operands[-1].value == shift_count
+    elif instruction.mnemonic == "lsr":
+        assert shift_type == ARMShiftType.LSR
+        assert instruction.operands[-1].value == shift_count
+    else:
+        operand = instruction.operands[index]
+        assert operand.shift == (shift_type, shift_count)
 
 
 def _test_variable(disassembler, address, index, name, size, data_type, location):
@@ -296,8 +312,8 @@ def _test_variable(disassembler, address, index, name, size, data_type, location
 
 
 @pytest.mark.parametrize("address,index,name,size,data_type,location", [
-    (0x40100d, 1, "arg_4", 1, "char", 8),
-    (0x401024, 0, "arg_0", 4, "int", 4),
+    (0x40100d, 1, "arg_4", 1, "byte", 8),
+    (0x401024, 0, "arg_0", 4, "dword", 4),
     (0x4058b4, 0, "lpProcName", 4, "lpcstr", -0x28),
     (0x4058b4, 1, "aGetlastactivep", 19, "char", 0x40a9a0),
     (0x4015a6, 0, "byte_40D1C8", 1, "byte", 0x40d1c8),
@@ -314,10 +330,7 @@ def test_variable_ida(disassembler, address, index, name, size, data_type, locat
     (0x40100d, 1, "param_2", 1, "byte", 8),
     (0x401024, 0, "param_1", 4, "byte *", 4),
     (0x40585b, 0, "local_8", 4, "undefined4", -0x8),
-    pytest.param(
-        0x4058b4, 0, "local_28", 4, "undefined4", -0x28,
-        marks=pytest.mark.xfail(reason="Ghidra 10.3.2 sometimes doesn't make this variable.")
-    ),
+    (0x4058b4, 0, "local_28", 4, "undefined4", -0x28),
     (0x4058b4, 1, "s_GetLastActivePopup_0040a9a0", 19, "string", 0x40a9a0),
     (0x4015a6, 0, "DAT_0040d1c8", 1, "undefined", 0x40d1c8),
     (0x404096, 0, "PTR_LeaveCriticalSection_0040a008", 4, "pointer", 0x40A008),
@@ -325,4 +338,6 @@ def test_variable_ida(disassembler, address, index, name, size, data_type, locat
     # (0x40100b, 0, "LAB_00401029", 1, "byte", 0x401029),
 ])
 def test_variable_ghidra(disassembler, address, index, name, size, data_type, location):
+    if disassembler.name == BACKEND_GHIDRA and address == 0x4058b4:
+        pytest.xfail("Ghidra 10.3.2 sometimes doesn't make this variable.")
     _test_variable(disassembler, address, index, name, size, data_type, location)

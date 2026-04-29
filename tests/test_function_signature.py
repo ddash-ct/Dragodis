@@ -1,7 +1,7 @@
 
 import pytest
 
-from dragodis import NotExistError
+from dragodis import NotExistError, BACKEND_VIVISECT
 from dragodis.interface.function_argument_location import StackLocation
 
 
@@ -55,7 +55,7 @@ def test_calling_convention(disassembler, address, calling_convention):
     assert calling_convention.lstrip("_") in signature.declaration
     # test changing calling convention
     signature.calling_convention = "fastcall"
-    assert signature.calling_convention == "__fastcall"
+    assert signature.calling_convention in ("__fastcall", "__msfastcall")
     assert "fastcall" in signature.declaration
     # reset
     signature.calling_convention = calling_convention
@@ -64,7 +64,7 @@ def test_calling_convention(disassembler, address, calling_convention):
 
 @pytest.mark.parametrize("address,return_types", [
     (0x401150, ("int", "undefined4")),
-    (0x40a0c4, ("lpvoid", "LPVOID")),
+    (0x40a0c4, ("lpvoid", "LPVOID", "int")),
 ])
 def test_return_type(disassembler, address, return_types):
     signature = disassembler.get_function_signature(address)
@@ -86,14 +86,21 @@ def test_parameters(disassembler):
     param_0 = signature.parameters[0]
     assert param_0.ordinal == 0
     assert param_0.size == 4
-    assert "byte *" in param_0.data_type.name.casefold()
+    if disassembler.name == BACKEND_VIVISECT:
+        assert param_0.data_type.name == "int"
+    else:
+        assert "byte *" in param_0.data_type.name.casefold()
     assert isinstance(param_0.location, StackLocation)
     assert param_0.location.stack_offset == 0
 
     param_1 = signature.parameters[1]
     assert param_1.ordinal == 1
-    assert param_1.size == 1
-    assert param_1.data_type.name in ("byte", "char")
+    if disassembler.name == BACKEND_VIVISECT:
+        assert param_1.size == 4
+        assert param_1.data_type.name == "int"
+    else:
+        assert param_1.size == 1
+        assert param_1.data_type.name in ("byte", "char")
     assert isinstance(param_1.location, StackLocation)
     assert param_1.location.stack_offset == 4
 
@@ -140,13 +147,16 @@ def test_modifying_parameters(disassembler):
     assert param_0.ordinal == 0
 
     orig_name = param_0.name
-    assert orig_name in ("a1", "param_1")
+    assert orig_name in ("a1", "param_1", "arg0")
     param_0.name = "newname"
     assert param_0.name == "newname"
     assert "newname" in signature.declaration
     param_0.name = orig_name
 
-    assert "byte" in param_0.data_type.name.casefold()
+    if disassembler.name == "Vivisect":
+        assert param_0.data_type.name == "int"
+    else:
+        assert "byte" in param_0.data_type.name.casefold()
 
     param_0.data_type = "char *"
     assert param_0.data_type.name.casefold() == "char *"

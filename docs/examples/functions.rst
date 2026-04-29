@@ -17,7 +17,7 @@ an easy way to interact with the various attributes of functions.
     >>> orig_type = signature.return_type
     >>> signature.return_type = "int"
     >>> print(signature)
-    INT __cdecl sub_401000(_BYTE *a1, char a2);
+    int __cdecl sub_401000(_BYTE *a1, char a2);
     >>> signature.return_type = orig_type
     >>> print(signature.calling_convention)
     __cdecl

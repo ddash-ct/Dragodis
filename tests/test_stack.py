@@ -1,6 +1,7 @@
 
 import pytest
 
+from dragodis import IDA
 
 def _test_stack_frame(disassembler, address, variables):
     function = disassembler.get_function(address)
@@ -21,29 +22,29 @@ def _test_stack_frame(disassembler, address, variables):
 
 @pytest.mark.parametrize("address,variables", [
     (0x401000, [
-        (4, "arg_0", "int"),
-        (8, "arg_4", "char"),
+        (4, "arg_0", "dword"),
+        (8, "arg_4", "byte"),
     ]),
     (0x4044F4, [
-        (-0x14, "var_10", "int"),
-        (-0xc, "var_8", "int"),
-        (-8, "var_4", "char"),
+        (-0x14, "var_10", "dword"),
+        (-0xc, "var_8", "dword"),
+        (-8, "var_4", "byte"),
     ])
 ])
-def test_stack_frame_ida(disassembler, address, variables):
+def test_stack_frame_ida(disassembler: IDA, address, variables):
     _test_stack_frame(disassembler, address, variables)
 
 
 @pytest.mark.parametrize("address,variables", [
     (0x103FC, [
-        (-0xd, "var_9", "char"),
-        (-0xc, "var_8", "int"),
+        (-0xd, "var_9", "byte"),
+        (-0xc, "var_8", "dword"),
         # IDA is missing variable at -4 since it interprets PUSH mnemonics instead of
         # explicitly defining the STR instruction.
         # e.g:  str  r11,[sp,#local_4]!
     ])
 ])
-def test_stack_frame_arm_ida(disassembler, address, variables):
+def test_stack_frame_arm_ida(disassembler: IDA, address, variables):
     _test_stack_frame(disassembler, address, variables)
 
 
@@ -71,4 +72,29 @@ def test_stack_frame_ghidra(disassembler, address, variables):
     ])
 ])
 def test_stack_frame_arm_ghidra(disassembler, address, variables):
+    _test_stack_frame(disassembler, address, variables)
+
+
+@pytest.mark.parametrize("address,variables", [
+    (0x401000, [
+        (4, "arg0", "int"),
+        (8, "arg1", "int"),
+    ]),
+    (0x4044F4, [
+        (-0x14, "local20", "int"),
+        (-0xc, "local12", "int"),
+        (-8, "local8", "int"),
+    ])
+])
+def test_stack_frame_vivisect(disassembler, address, variables):
+    _test_stack_frame(disassembler, address, variables)
+
+
+@pytest.mark.parametrize("address,variables", [
+    (0x103FC, [
+        (-0xd, "local13", "int"),
+        (-0xc, "local12", "int"),
+    ])
+])
+def test_stack_frame_arm_vivisect(disassembler, address, variables):
     _test_stack_frame(disassembler, address, variables)

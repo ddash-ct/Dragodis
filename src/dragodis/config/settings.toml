@@ -1,0 +1,46 @@
+
+# Default backend disassembler to use if not explicitly defined in script.
+# Must be one of: 'ida', 'ghidra', 'vivisect'
+disassembler = "vivisect"
+
+
+[ida]
+install_dir = "@format {env[IDADIR]}"
+# Determines whether autoanalysis should be conducted on the input file on startup.
+analyze = true
+# Determines whether to use the idalib library (if available).
+# (idalib is currently experimental and may crash the process. So this is off by default.)
+# https://docs.hex-rays.com/user-guide/idalib
+use_idalib = false
+# Number of seconds to wait for remote results. (0 to disable)
+timeout = 60
+# Number of attempts to connect to remote IDA server
+retry_count = 20
+# Number of seconds to wait between connection attempts.
+retry_wait = 5
+# Whether to generate a IDA log file. ('-L' flag)
+create_log = true
+# Extra arguments to pass to the 'ida' command. (e.g. ["-b800400", "-Tbinary"])
+# Consult the IDA documentation for more information.
+# https://docs.hex-rays.com/user-guide/configuration/command-line-switches
+extra_args = []
+
+
+[ghidra]
+install_dir = "@format {env[GHIDRA_INSTALL_DIR]}"
+# Determines whether autoanalysis should be conducted on the input file on startup.
+analyze = true
+# Extra keyword arguments to pass to pyghidra's `open_program()` function.
+#   (e.g. { project_name = "MyProject", project_location = "/home/bob/ghidra_projects" })
+# https://pypi.org/project/pyghidra/
+config = {}
+
+
+[vivisect]
+# Determines whether autoanalysis should be conducted on the input file on startup.
+analyze = true
+# Allow Dragodis to perform its own cleanup of Vivisect's analysis.
+cleanup_analysis = true
+# Extra configuration appended to the VivWorkspace. (e.g. { viv = { SymbolCacheSave = false } })
+# https://vivisect.readthedocs.io/en/latset/vivisect/devguides/gettingstarted.html#changing-configuration-items
+config = {}

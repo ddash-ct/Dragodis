@@ -6,22 +6,24 @@ import dragodis
 
 # TODO: Generalize the testing of .text since the actual string could change lot based
 #    on options set in the disassembler.
-from dragodis import FlowType
+from dragodis import FlowType, BACKEND_VIVISECT, BACKEND_IDA, BACKEND_GHIDRA
 from dragodis.interface.instruction import ARMConditionCode
 
 
 @pytest.mark.parametrize("address,mnemonic,text", [
     (0x401000, "push", {
-        "ida": "push    ebp",
-        "ghidra": "PUSH EBP",
+        BACKEND_IDA: "push    ebp",
+        BACKEND_GHIDRA: "PUSH EBP",
+        BACKEND_VIVISECT: "push ebp",
     }),
     (0x401003, "mov", {
-        "ida": "mov     eax, [ebp+arg_0]",
-        "ghidra": "MOV EAX,dword ptr [EBP + 0x8]",
+        BACKEND_IDA: "mov     eax, [ebp+arg_0]",
+        BACKEND_GHIDRA: "MOV EAX,dword ptr [EBP + 0x8]",
+        BACKEND_VIVISECT: "mov eax,dword [ebp + arg0]",
     })
 ])
 def test_basic(disassembler, address, mnemonic, text):
-    text = text[disassembler.name.lower()]
+    text = text[disassembler.name]
     instruction = disassembler.get_instruction(address)
 
     assert instruction.address == address
@@ -114,6 +116,8 @@ def test_condition_codes_arm(disassembler, address, condition_code):
     (0x106d0, True, True, False),    # POP     {R4-R10,PC}   / ldmia      sp!,{r4 r5 r6 r7 r8 r9 r10 pc}])
 ])
 def test_writeback_arm(disassembler, address, writeback, pre_indexed, post_indexed):
+    if disassembler.name == BACKEND_VIVISECT and pre_indexed:
+        pytest.xfail("Vivisect fails to detect pre-indexed addressing.")
     instruction = disassembler.get_instruction(address)
     assert instruction.writeback == writeback
     assert instruction.pre_indexed == pre_indexed

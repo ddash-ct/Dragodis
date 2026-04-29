@@ -33,7 +33,7 @@ A *Memory* object for the underlying data can be obtained using the ``.open()`` 
     4
     b'E\x08\x0f\xbe'
 
-    >>> for segment in dis.segments:
+    >>> for segment in dis.segments():
     ...     print(segment.name, hex(segment.start), hex(segment.end))
     .text 0x401000 0x40a000
     .idata 0x40a000 0x40a110

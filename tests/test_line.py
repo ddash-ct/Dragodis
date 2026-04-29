@@ -2,7 +2,7 @@
 import pytest
 
 import dragodis
-from dragodis import LineType, CommentType, interface
+from dragodis import LineType, CommentType, interface, BACKEND_VIVISECT, BACKEND_IDA, BACKEND_GHIDRA
 
 
 @pytest.mark.parametrize("address,line_type,value,size,data", [
@@ -20,6 +20,18 @@ def test_basic(disassembler, address, line_type, value, size, data):
     """
     Basic test for getting line type, value, size, and data
     """
+    if disassembler.name == BACKEND_VIVISECT:
+        if line_type == LineType.unloaded:
+            pytest.xfail("Vivisect doesn't support determining unloaded locations.")
+        elif address in (0x40b8bc, 0x40b8be, 0x40b784):
+            pytest.xfail("Vivisect fails to analyze these.")
+
+    # Ghidra changed unloaded to undefined.
+    if disassembler.name == BACKEND_GHIDRA and line_type == LineType.unloaded:
+        line_type = LineType.undefined
+        data = b"\x00"
+        value = 0
+
     line = disassembler.get_line(address)
     assert line.address == address
     assert line.type == line_type
@@ -85,45 +97,53 @@ def test_setting_type(disassembler, address, new_type, value):
     assert line.value == orig_value
 
 
-@pytest.mark.parametrize("address,data,value", [
+@pytest.mark.parametrize("address,data,value,type_", [
     # (0x401003, None),    # TODO: Add setting new instruction
-    (0x40c0c4, b"\xff", 0xff),  # undefined
-    (0x40ec38, b"", None),  # unloaded
-    (0x40c000, b"hello\x00", "hello"),  # string
-    (0x40b8bc, b"\x01\x00", 0x1),  # word
-    (0x40b8be, b"hello\x00", "hello"),  # string
-    (0x40b784, b"\xef\xcd\xab\x00", 0xabcdef),  # dword
-    (0x40a838, b"h\x00e\x00l\x00l\x00o\x00\x00\x00", "hello"),  # string16
+    (0x40c0c4, b"\xff", 0xff, LineType.undefined),
+    (0x40ec38, b"", None, LineType.unloaded),
+    (0x40c000, b"hello\x00", "hello", LineType.string),
+    (0x40b8bc, b"\x01\x00", 0x1, LineType.word),
+    (0x40b8be, b"hello\x00", "hello", LineType.string),
+    (0x40b784, b"\xef\xcd\xab\x00", 0xabcdef, LineType.dword),
+    (0x40a838, b"h\x00e\x00l\x00l\x00o\x00\x00\x00", "hello", LineType.string16),
 ])
-def test_setting_data_and_value(disassembler, address, data, value):
+def test_setting_data_and_value(disassembler, address, data, value, type_):
     """
-    Tests setting line to a new value or data and its affect on the other.
+    Tests setting line to a new value or data and its effect on the other.
     Also insures the line type doesn't get changed.
     """
+    if disassembler.name == "Vivisect":
+        # TODO: Update this when we can define new lines.
+        if address in (0x40b8bc, 0x40b784):
+            pytest.xfail("Vivisect doesn't recognize the line type.")
+
     line = disassembler.get_line(address)
+
+    # Fix type ahead of time.
+    if line.type != type_:
+        line.type = type_
+
     orig_value = line.value
     orig_data = line.data
-    orig_type = line.type
 
     # Test setting the value
     line.value = value
     assert line.value == value
     assert line.data == data
-    assert line.type == orig_type
+    assert line.type == type_
     line.value = orig_value
     assert line.value == orig_value
     assert line.data == orig_data
-    assert line.type == orig_type
 
     # Test setting the data
     line.data = data
     assert line.data == data
     assert line.value == value
-    assert line.type == orig_type
+    assert line.type == type_
     line.data = orig_data
     assert line.data == orig_data
     assert line.value == orig_value
-    assert line.type == orig_type
+    assert line.type == type_
 
 
 def test_setting_value_with_new_type(disassembler):
@@ -167,7 +187,7 @@ def test_name(disassembler):
     """
     Tests getting and seting a name on a line.
     """
-    line = disassembler.get_line(0x40c0c4)
+    line = disassembler.get_line(0x40c000)
     orig_name = line.name
     assert orig_name
     line.name = "new_name"
@@ -187,14 +207,22 @@ def test_prev_next(disassembler):
 
     # Test getting next line of undefined data.
     line = disassembler.get_line(0x40c0c4)
-    assert line.prev.address == 0x40c0c3
+    if disassembler.name == BACKEND_VIVISECT:
+        # Vivisect skips to next defined data.
+        assert line.prev.address == 0x0040c0a0
+    else:
+        assert line.prev.address == 0x40c0c3
+
     # TODO: Look into standardizing this.
     # IDA treats all undefined data in chunks.
-    if disassembler.name.lower() == "ida":
+    if disassembler.name == BACKEND_IDA:
         assert line.next.address == 0x40c114  # Jumps to next defined item.
     # Ghidra treats each individual byte of undefined data as a separate line.
-    elif disassembler.name.lower() == "ghidra":
+    elif disassembler.name == BACKEND_GHIDRA:
         assert line.next.address == 0x40c0c5  # Just the next byte
+    # Vivisect skips over undefined data.
+    elif disassembler.name == BACKEND_VIVISECT:
+        assert line.next.address == 0x40c114
     else:
         pytest.fail(f"Update test for disassembler: {disassembler.name}")
 
@@ -226,7 +254,12 @@ def test_comment(disassembler, address, comment, comment_type):
     """
     # Test setting comment
     line = disassembler.get_line(address)
-    assert line.get_comment(comment_type=comment_type) is None
+    # Vivisect default comments with "int" for data address.
+    if disassembler.name == "Vivisect" and address == 0x40c130:
+        default_comment = "int"
+    else:
+        default_comment = None
+    assert line.get_comment(comment_type=comment_type) == default_comment
     line.set_comment(comment, comment_type=comment_type)
     assert line.get_comment(comment_type=comment_type) == comment
     # Test resetting comment

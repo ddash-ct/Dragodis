@@ -1,5 +1,6 @@
 
 import pytest
+from dragodis import BACKEND_VIVISECT
 
 
 @pytest.mark.parametrize("address,data", [
@@ -63,7 +64,7 @@ def test_write(disassembler, address):
 
 
 def test_write_uninitialized(disassembler):
-    address = 0x0040D200
+    address = 0xff
     with disassembler.open_memory(address, address + 4) as memory:
         with pytest.raises(IOError):
             memory.write(b"\xde\xad\xbe\xef")

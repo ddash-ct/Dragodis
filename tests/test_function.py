@@ -2,6 +2,7 @@
 import pytest
 
 import dragodis
+from dragodis import BACKEND_VIVISECT
 
 
 # TODO: Find and test more complex examples, such as fragmented functions or functions that
@@ -24,7 +25,7 @@ def test_start_end(disassembler, address, start, end):
 def test_name(disassembler):
     # Test a library function, which should have the same name regardless of disassembler.
     func = disassembler.get_function(0x4012a0)
-    assert func.name == "_printf"
+    assert func.name in ("_printf", "sub_004012a0")  # vivisect doesn't detect the library.
     func.name = "new_func_name"
     assert func.name == "new_func_name"
     func.name = None
@@ -34,16 +35,20 @@ def test_name(disassembler):
 
 
 def test_comment(disassembler):
+    support_repeatable = disassembler.name != "Vivisect"
+
     func = disassembler.get_function(0x401030)
     func.set_comment("regular comment")
     assert func.get_comment() == "regular comment"
-    func.set_comment("repeatable comment", dragodis.CommentType.repeatable)
-    assert func.get_comment() == "regular comment"
-    assert func.get_comment(dragodis.CommentType.repeatable) == "repeatable comment"
+    if support_repeatable:
+        func.set_comment("repeatable comment", dragodis.CommentType.repeatable)
+        assert func.get_comment() == "regular comment"
+        assert func.get_comment(dragodis.CommentType.repeatable) == "repeatable comment"
     func.set_comment(None)
     assert func.get_comment() is None
-    func.set_comment(None, dragodis.CommentType.repeatable)
-    assert func.get_comment(dragodis.CommentType.repeatable) is None
+    if support_repeatable:
+        func.set_comment(None, dragodis.CommentType.repeatable)
+        assert func.get_comment(dragodis.CommentType.repeatable) is None
 
     # Test invalid comment type for a function.
     with pytest.raises(ValueError):
@@ -52,9 +57,11 @@ def test_comment(disassembler):
 
 def test_references(disassembler):
     func = disassembler.get_function(0x401000)
-    refs = list(func.references_to)
-    # Number of references can be 18 or 20 depending if the disassembler counts the referent in the PE header due to being the first function in the text section.
-    assert len(refs) in (18, 20)
+    refs = list(func.references_to())
+    # Number of references can be 18 or 20 depending if the disassembler counts the referent in the PE header
+    # due to being the first function in the text section.
+    # Vivisect has 36
+    assert len(refs) in (18, 20, 36)
     assert all(ref.to_address == 0x401000 for ref in refs)
     assert sorted(ref.from_address for ref in refs if ref.is_code) == [
         0x40103a,
@@ -77,13 +84,13 @@ def test_references(disassembler):
         0x401139,
     ]
 
-    refs = list(func.references_from)
+    refs = list(func.references_from())
     assert len(refs) == 0
 
 
 def test_call_references(disassembler):
     func = disassembler.get_function(0x401000)
-    assert list(func.calls_to) == [
+    assert list(func.calls_to()) == [
         0x40103a,
         0x401049,
         0x401058,
@@ -103,17 +110,17 @@ def test_call_references(disassembler):
         0x40112a,
         0x401139,
     ]
-    assert list(func.calls_from) == []
-    callers = list(func.callers)
+    assert list(func.calls_from()) == []
+    callers = list(func.callers())
     assert len(callers) == 1
     assert callers[0].start == 0x401030
-    assert list(func.callees) == []
+    assert list(func.callees()) == []
 
     func = disassembler.get_function(0x401030)
-    assert list(func.calls_to) == [
+    assert list(func.calls_to()) == [
         0x401153,
     ]
-    assert list(func.calls_from) == [
+    assert list(func.calls_from()) == [
         (0x40103a, 0x401000),
         (0x401049, 0x401000),
         (0x401058, 0x401000),
@@ -133,10 +140,10 @@ def test_call_references(disassembler):
         (0x40112a, 0x401000),
         (0x401139, 0x401000),
     ]
-    callers = list(func.callers)
+    callers = list(func.callers())
     assert len(callers) == 1
     assert callers[0].start == 0x401150
-    callees = list(func.callees)
+    callees = list(func.callees())
     assert len(callees) == 1
     assert callees[0].start == 0x401000
 
@@ -227,5 +234,7 @@ def test_data(disassembler):
     (0x4012a0, True),
 ])
 def test_is_library(disassembler, address, result):
+    if disassembler.name == BACKEND_VIVISECT:
+        pytest.xfail("Vivisect does not support library detection.")
     func = disassembler.get_function(address)
     assert func.is_library == result

@@ -1,29 +1,36 @@
 
 import pytest
 
-from dragodis import SegmentType, SegmentPermission
+from dragodis import SegmentType, SegmentPermission, BACKEND_IDA, BACKEND_GHIDRA, BACKEND_VIVISECT
 
 
 def test_basic(disassembler):
-    if disassembler.name.lower() == "ida":
+    if disassembler.name == BACKEND_IDA:
         expected_segments = [
             (0x00401000, 0x0040A000, ".text", True, SegmentPermission.read | SegmentPermission.execute),
             (0x0040A000, 0x0040A110, ".idata", False, SegmentPermission.read),
             (0x0040A110, 0x0040C000, ".rdata", True, SegmentPermission.read),
             (0x0040C000, 0x0040F000, ".data", True, SegmentPermission.read | SegmentPermission.write),
         ]
-    elif disassembler.name.lower() == "ghidra":
+    elif disassembler.name == BACKEND_GHIDRA:
         expected_segments = [
             (0x00400000, 0x00400400, "Headers", True, SegmentPermission.read),
             (0x00401000, 0x00409C00, ".text", True, SegmentPermission.read | SegmentPermission.execute),
             (0x0040A000, 0x0040BE00, ".rdata", True, SegmentPermission.read),
-            (0x0040C000, 0x0040D200, ".data", True, SegmentPermission.read | SegmentPermission.write),
-            (0x0040D200, 0x0040ed48, ".data", False, SegmentPermission.read | SegmentPermission.write),
+            (0x0040C000, 0x0040ed48, ".data", True, SegmentPermission.read | SegmentPermission.write),
+        ]
+    elif disassembler.name == BACKEND_VIVISECT:
+        expected_segments = [
+            (0x00400000, 0x00401000, "PE_Header", True, SegmentPermission.read),
+            # Not sure why, but vivisect marks everything as executable.
+            (0x00401000, 0x00409C00, ".text", True, SegmentPermission.read | SegmentPermission.execute),
+            (0x0040A000, 0x0040BE00, ".rdata", True, SegmentPermission.read | SegmentPermission.execute),
+            (0x0040C000, 0x0040EE00, ".data", True, SegmentPermission.read | SegmentPermission.write | SegmentPermission.execute),
         ]
     else:
         raise NotImplementedError
 
-    actual_segments = list(disassembler.segments)
+    actual_segments = list(disassembler.segments())
     # Ghidra 10.2.* sometimes includes an extra "tdb" memory block... we are just going ignore that.
     actual_segments = [seg for seg in actual_segments if seg.name != "tdb"]
     print(actual_segments)
@@ -50,7 +57,7 @@ def test_basic(disassembler):
 
 
 def test_create_segment(disassembler):
-    orig_segments = list(disassembler.segments)
+    orig_segments = list(disassembler.segments())
     segment = disassembler.create_segment(".test", 0x1234, 256)
     assert segment
     assert segment.name == ".test"
@@ -58,7 +65,7 @@ def test_create_segment(disassembler):
     assert segment.end == 0x1234 + 256
     assert not segment.initialized
 
-    segments = list(disassembler.segments)
+    segments = list(disassembler.segments())
     assert len(segments) == len(orig_segments) + 1
     assert any(seg.name == ".test" for seg in segments)
 

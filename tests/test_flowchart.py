@@ -1,6 +1,7 @@
 
 import pytest
 
+import dragodis
 from dragodis import FlowType
 
 
@@ -26,23 +27,30 @@ def test_blocks_start_end_flow_type(disassembler, address, block_list):
     flowchart = disassembler.get_flowchart(address)
     assert flowchart
     assert len(flowchart) == len(block_list)
-    assert [(block.start, block.end, block.flow_type) for block in flowchart.blocks] == block_list
+    assert [(block.start, block.end, block.flow_type) for block in flowchart.blocks()] == block_list
 
 
 @pytest.mark.parametrize("address,blocks_to,blocks_from", [
     (0x401003, [0x401000, 0x40100D], [0x40100D, 0x401029]),
     (0x401029, [0x401003], []),
     (0x4035B3, [0x4035AB, 0x4035B1], [0x4035AB, 0x4035BA]),
-    pytest.param(
-        0x402cfe, [0x402cce, 0x402cf0], [0x402d3a],
-        marks=pytest.mark.xfail(reason="Ghidra fails to analyze _invoke_watson as a no return function.")
-    ),
+    (0x402cfe, [0x402cce], [0x402d3a]),
 ])
 def test_blocks_to_from(disassembler, address, blocks_to, blocks_from):
+    if address == 0x402cfe:
+        blocks_to = list(blocks_to)
+        # IDA is able to analyze '_invoke_watson' as a no return function (has a 'leave' opcode),
+        # but the remaining instruction becomes an orphaned parent block.
+        if disassembler.name == dragodis.BACKEND_IDA:
+            blocks_to.append(0x402cf0)
+        # Vivisect does not analyze any no return function, and therefore treats the blocks like normal.
+        elif disassembler.name == dragodis.BACKEND_VIVISECT:
+            blocks_to.append(0x402ce6)
+
     block = disassembler.get_basic_block(address)
     assert block
-    assert sorted([b.start for b in block.blocks_to]) == blocks_to
-    assert sorted([b.start for b in block.blocks_from]) == blocks_from
+    assert sorted([b.start for b in block.blocks_to()]) == blocks_to
+    assert sorted([b.start for b in block.blocks_from()]) == blocks_from
 
 
 def test_equality(disassembler):

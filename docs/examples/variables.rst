@@ -27,7 +27,7 @@ A variable can be pulled by address or from another object such as a function or
     0x0040c000: char aIdmmnVnsme
 
     >>> func = dis.get_function(0x401030)
-    >>> for var in func.variables:
+    >>> for var in func.variables():
     ...     print(var)
     0x0040c000: char aIdmmnVnsme
     0x0040c010: char aVgqvQvpkleUkvj

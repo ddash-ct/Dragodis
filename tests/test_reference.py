@@ -10,6 +10,6 @@ def test_create_reference(disassembler):
     assert ref.type == dragodis.ReferenceType.code_jump
 
     insn = disassembler.get_instruction(0x40100d)
-    assert ref in list(insn.references_to)
+    assert ref in list(insn.references_to())
     insn = disassembler.get_instruction(0x401014)
-    assert ref in list(insn.references_from)
+    assert ref in list(insn.references_from())
