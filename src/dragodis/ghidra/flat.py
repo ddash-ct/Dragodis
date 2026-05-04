@@ -184,11 +184,22 @@ class GhidraFlatAPI(FlatAPI, GhidraDisassembler):
 
     def set_bytes(self, addr: int, data: bytes):
         from ghidra.program.model.mem import MemoryAccessException
+        address = self._to_addr(addr)
         try:
             memory = self._program.getMemory()
-            memory.setBytes(self._to_addr(addr), data)
         except MemoryAccessException as e:
             raise NotExistError(f"Cannot set bytes at {hex(addr)}: {e}")
+
+        try:
+            memory.setBytes(address, data)
+        except MemoryAccessException as e:
+            # If setting bytes fails, attempt to initialize the memory block
+            try:
+                block = memory.getBlock(address)
+                memory.convertToInitialized(block, 0)
+                memory.setBytes(address, data)
+            except MemoryAccessException as e:
+                raise NotExistError(f"Cannot set bytes at {hex(addr)}: {e}")
 
     def find_bytes(self, pattern: bytes, start: int = None, end: int = None, reverse=False) -> int:
         if start is not None:

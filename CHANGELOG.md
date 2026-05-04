@@ -1,5 +1,12 @@
 # Changelog
 
+
+## [Unreleased]
+- Update `set_bytes` to attempt writing to an uninitialized address if:
+  - In IDA, the address is in a writeable segment
+  - In Ghidra, the address can be initialized
+
+
 ## [1.2.0] - 2026-05-01
 - Tested and updated for IDA 8.5 and 9.1
 - Tested on Ghidra 11.1.1
