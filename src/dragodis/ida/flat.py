@@ -173,13 +173,7 @@ class IDAFlatAPI(FlatAPI, IDADisassembler):
             raise ValueError(f"Could not override compiler to {compiler}")
         self._ida_auto.auto_wait()
 
-    def _check_writable(self, addr: int) -> bool:
-        return bool((segment := self.get_segment(addr)) and segment.permissions & SegmentPermission.write)
-
     def set_bytes(self, addr: int, data: bytes):
-        # Check if we would be writing to an uninitialized section that is not writable
-        if not (self._ida_helpers.is_loaded(addr, len(data)) or self._check_writable(addr)):
-            raise NotExistError(f"Unable to write to address not fully initialized or writeable: 0x{addr:08x}")
         self._ida_bytes.patch_bytes(addr, data)
 
     def find_bytes(self, pattern: bytes, start: int = None, end: int = None, reverse=False) -> int:

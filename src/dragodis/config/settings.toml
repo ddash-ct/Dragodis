@@ -34,6 +34,8 @@ analyze = true
 #   (e.g. { project_name = "MyProject", project_location = "/home/bob/ghidra_projects" })
 # https://pypi.org/project/pyghidra/
 config = {}
+# Determines if an attempt should be made to initialize an address block if it is uninitialized on write request
+initialize_on_write = true
 
 
 [vivisect]

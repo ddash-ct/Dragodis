@@ -11,6 +11,7 @@ from dragodis.interface.flat import FlatAPI, MISSING
 from dragodis.interface.reference import ReferenceType
 from dragodis.interface.types import CompilerType
 from dragodis.exceptions import NotExistError, UnsupportedError
+from dragodis.config import settings
 from .data_type import GhidraDataType
 from .disassembler import GhidraDisassembler, GhidraLocalDisassembler, GhidraRemoteDisassembler
 from .function import GhidraFunction
@@ -193,12 +194,15 @@ class GhidraFlatAPI(FlatAPI, GhidraDisassembler):
         try:
             memory.setBytes(address, data)
         except MemoryAccessException as e:
-            # If setting bytes fails, attempt to initialize the memory block
-            try:
-                block = memory.getBlock(address)
-                memory.convertToInitialized(block, 0)
-                memory.setBytes(address, data)
-            except MemoryAccessException as e:
+            if settings.ghidra.initialize_on_write:
+                # If setting bytes fails, attempt to initialize the memory block
+                try:
+                    block = memory.getBlock(address)
+                    memory.convertToInitialized(block, 0)
+                    memory.setBytes(address, data)
+                except MemoryAccessException as e:
+                    raise NotExistError(f"Cannot set bytes at {hex(addr)}: {e}")
+            else:
                 raise NotExistError(f"Cannot set bytes at {hex(addr)}: {e}")
 
     def find_bytes(self, pattern: bytes, start: int = None, end: int = None, reverse=False) -> int:
