@@ -23,7 +23,7 @@ from .segment import IDASegment
 from .string import IDAString
 from .symbol import IDAImport, IDAExport
 from .variable import IDAGlobalVariable
-from ..interface import CompilerType, ReferenceType, SegmentPermission
+from ..interface import CompilerType, ReferenceType
 from ..utils import genproperty
 
 cache = lru_cache(maxsize=1024)
