@@ -174,7 +174,13 @@ class IDAFlatAPI(FlatAPI, IDADisassembler):
         self._ida_auto.auto_wait()
 
     def set_bytes(self, addr: int, data: bytes):
-        self._ida_bytes.patch_bytes(addr, data)
+        # Check if we would be writing to an uninitialized section that is not in the binary
+        if self._ida_helpers.is_loaded(addr, len(data)) or self.get_segment(addr):
+            self._ida_bytes.patch_bytes(addr, data)
+        else:
+            raise NotExistError(
+                f"Unable to write to address not fully initialized or in a segment of the binary: 0x{addr:08x}"
+            )
 
     def find_bytes(self, pattern: bytes, start: int = None, end: int = None, reverse=False) -> int:
         # Convert bytes pattern into hex separated by space format that IDA likes.
